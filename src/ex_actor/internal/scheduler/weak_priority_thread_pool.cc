@@ -15,7 +15,9 @@
 #include "ex_actor/internal/scheduler/weak_priority_thread_pool.h"
 
 #include <algorithm>
+#include <bit>
 #include <random>
+#include <stdexcept>
 
 #include "ex_actor/internal/platform.h"
 
@@ -27,16 +29,26 @@ thread_local std::minstd_rand tl_rng {std::random_device {}()};
 
 }  // namespace
 
+static constexpr size_t kInitialSlotCapacity = 512;
+
 WeakPriorityThreadPool::WeakPriorityThreadPool(size_t thread_count, size_t num_sub_queues)
     : thread_count_(thread_count),
       num_sub_queues_(std::max<size_t>(2, num_sub_queues == 0 ? thread_count / 2 : num_sub_queues)),
       sub_queues_(num_sub_queues_) {
+  for (auto& sq : sub_queues_) {
+    for (auto& slot : sq.slots) {
+      slot.reserve(kInitialSlotCapacity);
+    }
+  }
   for (size_t i = 0; i < thread_count_; ++i) {
     workers_.emplace_back([this](const std::stop_token& stop_token) { WorkerThreadLoop(stop_token); });
   }
 }
 
 void WeakPriorityThreadPool::EnqueueOperation(TypeErasedOperation* operation, uint32_t priority) {
+  if (priority >= kMaxPriorityLevels) {
+    throw std::invalid_argument("WeakPriorityThreadPool: priority must be less than 64");
+  }
   if (owning_pool_ == this) {
     if (local_slot_ == nullptr) {
       local_slot_ = operation;
@@ -56,7 +68,8 @@ void WeakPriorityThreadPool::EnqueueOperation(TypeErasedOperation* operation, ui
   {
     auto& sq = sub_queues_[idx];
     std::lock_guard guard(sq.lock);
-    sq.queue[priority].push_back(operation);
+    sq.slots[priority].push_back(operation);
+    sq.bitmap.fetch_or(uint64_t {1} << priority, std::memory_order_relaxed);
   }
   sema_.signal();
 }
@@ -68,33 +81,40 @@ WeakPriorityThreadPool::TypeErasedOperation* WeakPriorityThreadPool::TryDequeueO
     idx_b = (idx_b + 1) % num_sub_queues_;
   }
 
-  auto pop_one = [](SubQueue& sq) -> TypeErasedOperation* {
-    auto it = sq.queue.begin();
-    auto& fifo = it->second;
-    TypeErasedOperation* op = fifo.front();
-    fifo.pop_front();
-    if (fifo.empty()) {
-      sq.queue.erase(it);
+  uint64_t bm_a = sub_queues_[idx_a].bitmap.load(std::memory_order_relaxed);
+  uint64_t bm_b = sub_queues_[idx_b].bitmap.load(std::memory_order_relaxed);
+  if (bm_a == 0 && bm_b == 0) {
+    return nullptr;
+  }
+
+  size_t first = idx_a;
+  size_t second = idx_b;
+  if (bm_a == 0 || (bm_b != 0 && std::countr_zero(bm_b) < std::countr_zero(bm_a))) {
+    first = idx_b;
+    second = idx_a;
+  }
+
+  auto try_pop = [](SubQueue& sq) -> TypeErasedOperation* {
+    std::lock_guard guard(sq.lock);
+    uint64_t bm = sq.bitmap.load(std::memory_order_relaxed);
+    if (bm == 0) {
+      return nullptr;
+    }
+    size_t pri = std::countr_zero(bm);
+    auto& slot = sq.slots[pri];
+    TypeErasedOperation* op = slot.back();
+    slot.pop_back();
+    if (slot.empty()) {
+      sq.bitmap.fetch_and(~(uint64_t {1} << pri), std::memory_order_relaxed);
     }
     return op;
   };
 
-  std::scoped_lock guard(sub_queues_[idx_a].lock, sub_queues_[idx_b].lock);
-
-  bool has_a = !sub_queues_[idx_a].queue.empty();
-  bool has_b = !sub_queues_[idx_b].queue.empty();
-  if (has_a && has_b) {
-    uint32_t pri_a = sub_queues_[idx_a].queue.begin()->first;
-    uint32_t pri_b = sub_queues_[idx_b].queue.begin()->first;
-    return pop_one(pri_a <= pri_b ? sub_queues_[idx_a] : sub_queues_[idx_b]);
+  TypeErasedOperation* op = try_pop(sub_queues_[first]);
+  if (op != nullptr) {
+    return op;
   }
-  if (has_a) {
-    return pop_one(sub_queues_[idx_a]);
-  }
-  if (has_b) {
-    return pop_one(sub_queues_[idx_b]);
-  }
-  return nullptr;
+  return try_pop(sub_queues_[second]);
 }
 
 void WeakPriorityThreadPool::WorkerThreadLoop(const std::stop_token& stop_token) {

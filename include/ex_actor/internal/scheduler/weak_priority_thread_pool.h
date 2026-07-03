@@ -14,9 +14,9 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <cstdint>
-#include <deque>
-#include <map>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -35,6 +35,8 @@ namespace ex_actor {
 class WeakPriorityThreadPool {
  public:
   using TypeErasedOperation = internal::TypeErasedOperation;
+
+  static constexpr size_t kMaxPriorityLevels = 64;
 
   explicit WeakPriorityThreadPool(size_t thread_count, size_t num_sub_queues = 0);
 
@@ -59,8 +61,9 @@ class WeakPriorityThreadPool {
 
  private:
   struct alignas(128) SubQueue {
+    std::atomic<uint64_t> bitmap {0};
     std::mutex lock;
-    std::map<uint32_t, std::deque<TypeErasedOperation*>> queue;
+    std::array<std::vector<TypeErasedOperation*>, kMaxPriorityLevels> slots;
   };
 
   size_t thread_count_;
