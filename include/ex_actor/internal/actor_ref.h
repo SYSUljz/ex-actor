@@ -28,10 +28,9 @@
 #include "ex_actor/internal/reflect.h"
 #include "ex_actor/internal/serialization.h"
 #include "ex_actor/internal/util.h"
+
 namespace ex_actor::internal {
-// ==============================
-// rfl serialization support
-// ==============================
+
 struct ActorRefSerdeContext {
   uint64_t this_node_id = 0;
   std::function<TypeErasedActor*(uint64_t)> actor_look_up_fn;
@@ -268,6 +267,10 @@ struct hash<ex_actor::ActorRef<UserClass>> {
   }
 };
 }  // namespace std
+
+// ==============================
+// rfl serialization support
+// ==============================
 
 namespace rfl {
 template <typename U>
