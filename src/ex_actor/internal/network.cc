@@ -356,7 +356,7 @@ void MessageBroker::CheckClusterStateWaiterTimeout() {
 void MessageBroker::StartRecvSocketPuller() {
   zmq::socket_t recv_socket {zmq_context_, zmq::socket_type::dealer};
   recv_socket.bind(cluster_config_.listen_address);
-  recv_socket.set(zmq::sockopt::linger, 1000);
+  recv_socket.set(zmq::sockopt::linger, 0);
   recv_socket.set(zmq::sockopt::sndhwm, 0);
   log::Info("Node {:#x}'s recv socket bound to {}", this_node_id_, cluster_config_.listen_address);
 
@@ -390,7 +390,7 @@ void MessageBroker::StartPeriodicalTaskScheduler() {
 
 void MessageBroker::ConnectContactSendSocket() {
   contact_node_send_socket_ = zmq::socket_t(zmq_context_, zmq::socket_type::dealer);
-  contact_node_send_socket_.set(zmq::sockopt::linger, 1000);
+  contact_node_send_socket_.set(zmq::sockopt::linger, kDefaultSocketLingerMs);
   contact_node_send_socket_.set(zmq::sockopt::sndhwm, 0);
   contact_node_send_socket_.connect(cluster_config_.contact_node_address);
   contact_node_send_socket_last_build_ms_ = GetTimeMs();
@@ -445,7 +445,7 @@ void MessageBroker::OnNodeAlive(uint64_t node_id) {
 
   // Create send socket
   auto& socket = (node_id_to_send_socket_[new_node.node_id] = zmq::socket_t(zmq_context_, zmq::socket_type::dealer));
-  socket.set(zmq::sockopt::linger, 1000);
+  socket.set(zmq::sockopt::linger, kDefaultSocketLingerMs);
   socket.set(zmq::sockopt::sndhwm, 0);
   socket.connect(new_node.address);
 
