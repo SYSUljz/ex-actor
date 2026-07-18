@@ -353,7 +353,7 @@ void MessageBroker::CheckClusterStateWaiterTimeout() {
 void MessageBroker::StartRecvSocketPuller() {
   zmq::socket_t recv_socket {zmq_context_, zmq::socket_type::dealer};
   recv_socket.bind(cluster_config_.listen_address);
-  recv_socket.set(zmq::sockopt::linger, 0);
+  recv_socket.set(zmq::sockopt::linger, 30000);
   recv_socket.set(zmq::sockopt::sndhwm, 0);
   log::Info("Node {:#x}'s recv socket bound to {}", this_node_id_, cluster_config_.listen_address);
 
